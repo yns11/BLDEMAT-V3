@@ -126,14 +126,6 @@ def afficher_logo() -> None:
         st.sidebar.error(f"Logo introuvable : {LOGO_EMOTORS}")
 
 
-def afficher_logo() -> None:
-    """Logo eMotors en haut de la barre latérale (haut à gauche de l'app)."""
-    st.markdown(
-        f'<div style="padding:0.2rem 0 0.6rem;">{LOGO_EMOTORS_SVG}</div>',
-        unsafe_allow_html=True,
-    )
-
-
 # --- Messages "flash" : survivent à un st.rerun (sinon le message disparaît
 # avant que l'utilisateur ait pu le lire). ---
 def set_flash(kind: str, message: str) -> None:
