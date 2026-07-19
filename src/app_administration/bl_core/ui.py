@@ -112,7 +112,7 @@ def injecter_style() -> None:
 # Logo eMotors — recréation SVG (navy/vert de la charte) pensée pour un fond
 # sombre (barre latérale) : E stylisé + « EMOTORS », E vert. Remplaçable par le
 # fichier officiel si besoin (garder le même appel afficher_logo()).
-LOGO_EMOTORS = "./Logo-Emotors-1.jpg"
+LOGO_EMOTORS = "./bl_core/Logo-Emotors-1.jpg"
 
 
 def afficher_logo() -> None:
