@@ -2,6 +2,7 @@
 
 import logging
 import sys
+import os
 
 import streamlit as st
 
@@ -111,29 +112,18 @@ def injecter_style() -> None:
 # Logo eMotors — recréation SVG (navy/vert de la charte) pensée pour un fond
 # sombre (barre latérale) : E stylisé + « EMOTORS », E vert. Remplaçable par le
 # fichier officiel si besoin (garder le même appel afficher_logo()).
-LOGO_EMOTORS_SVG = """
-<svg viewBox="0 0 250 66" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="eMotors"
-     style="width:88%;max-width:210px;height:auto;display:block;margin:0.2rem auto 0.4rem;">
-  <g transform="translate(4,6) skewX(-9)">
-    <rect x="0"  y="0"  width="15" height="54" rx="3" fill="#FFFFFF"/>
-    <rect x="0"  y="0"  width="46" height="14" rx="3" fill="#FFFFFF"/>
-    <rect x="0"  y="20" width="34" height="13" rx="3" fill="#FFFFFF"/>
-    <rect x="0"  y="40" width="46" height="14" rx="3" fill="#FFFFFF"/>
-  </g>
-  <text x="70" y="46" font-family="Segoe UI, Arial, sans-serif" font-size="34"
-        font-weight="800" letter-spacing="-1">
-    <tspan fill="#43B02A">E</tspan><tspan fill="#FFFFFF">MOTORS</tspan>
-  </text>
-</svg>
-"""
+LOGO_EMOTORS = "./Logo-Emotors-1.jpg"
 
 
 def afficher_logo() -> None:
     """Logo eMotors en haut de la barre latérale (haut à gauche de l'app)."""
-    st.markdown(
-        f'<div style="padding:0.2rem 0 0.6rem;">{LOGO_EMOTORS_SVG}</div>',
-        unsafe_allow_html=True,
-    )
+    if os.path.exists(LOGO_EMOTORS):
+        # On utilise st.image pour intégrer proprement le JPG
+        # use_container_width=True permet de s'adapter à la largeur de la sidebar
+        st.image(LOGO_EMOTORS, use_container_width=True)
+    else:
+        # Message d'erreur discret si le fichier est manquant dans le repo
+        st.sidebar.error(f"Logo introuvable : {LOGO_EMOTORS}")
 
 
 # --- Messages "flash" : survivent à un st.rerun (sinon le message disparaît
