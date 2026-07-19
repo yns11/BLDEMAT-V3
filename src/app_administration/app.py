@@ -1,11 +1,13 @@
 """Application « Administration des BL » — V3.
 
 Expérience structurée type « model-driven » (à la Power Apps) :
-  - barre de navigation latérale : modules Achat / Vente / Gestion, vues ;
-  - ruban d'actions contextuel au-dessus de la grille ;
-  - grande grille de données avec cases à cocher pour les actions de masse
-    (vues BL) ou édition directe des lignes (référentiels, CRUD complet) ;
-  - fiches de modification et confirmations dans des boîtes de dialogue.
+  - logo eMotors et navigation latérale : Tableau de bord, puis modules
+    Achat / Vente / Gestion avec leurs vues indentées ;
+  - tableau de bord interactif (KPI + graphiques filtrables) ;
+  - ruban d'actions contextuel au-dessus de chaque grille ;
+  - grille de données avec cases à cocher (actions de masse) ou édition
+    directe (référentiels, CRUD complet) ;
+  - notifications EDI NOK -> OK journalisées en base et affichées en lecture.
 """
 
 import datetime
@@ -13,7 +15,7 @@ import datetime
 import pandas as pd
 import streamlit as st
 
-from bl_core import notifications, repository, ui
+from bl_core import repository, ui
 from bl_core.identity import get_current_user
 
 st.set_page_config(page_title="Administration BL", page_icon="🗂️", layout="wide")
@@ -25,32 +27,120 @@ utilisateur = get_current_user()
 TAILLE_PAGE = 50
 boite_dialogue = getattr(st, "dialog", None) or st.experimental_dialog
 
+ESPACE_DASHBOARD = "📊 Tableau de bord"
 MODULES = {
     "Achat": ["BL réception", "DESADV achat", "Fournisseurs"],
     "Vente": ["BL expédition", "DESADV vente", "Clients"],
-    "Gestion": ["Gestionnaires", "Portefeuilles", "Quais"],
+    "Gestion": ["Gestionnaires", "Portefeuilles", "Quais", "Notifications"],
 }
 ICONES = {"Achat": "🛒", "Vente": "🚚", "Gestion": "⚙️"}
+LABELS_MODULE = {f"{ICONES[m]} {m}": m for m in MODULES}
+
+
+def _vider_grille(cle: str) -> None:
+    st.session_state.pop(cle, None)
+
+
+def _journaliser_passage_ok(numero_bl, fournisseur, quai, date_reception) -> None:
+    """Journalise le passage EDI NOK -> OK dans la table notifications (à la
+    place de l'ancien envoi d'email — un flux Power Automate pourra l'envoyer)."""
+    message = (f"BL {numero_bl} ({fournisseur or '—'}, quai {quai or '—'}, "
+               f"reçu le {date_reception or '—'}) : état passé de EDI NOK à OK "
+               f"par {utilisateur}.")
+    repository.enregistrer_notification("EDI_NOK_OK", numero_bl, message, utilisateur)
+
 
 # =====================================================================
 # NAVIGATION LATÉRALE
 # =====================================================================
 with st.sidebar:
-    st.markdown("## 🗂️ Administration BL")
+    ui.afficher_logo()
     st.caption("BL dématérialisés · V3")
-    module = st.radio("Module", list(MODULES),
-                      format_func=lambda m: f"{ICONES[m]} {m}")
     st.divider()
-    vue = st.radio("Vues", MODULES[module])
+    espace = st.radio("Navigation", [ESPACE_DASHBOARD] + list(LABELS_MODULE),
+                      label_visibility="collapsed")
+    module = LABELS_MODULE.get(espace)
+    vue = None
+    if module:
+        st.caption("Vues")
+        _, col_vues = st.columns([1, 15])
+        with col_vues:
+            vue = st.radio(f"Vues {module}", MODULES[module], label_visibility="collapsed")
     st.divider()
     st.caption(f"👤 {utilisateur}")
 
-st.markdown(f"### {ICONES[module]} {module} › {vue}")
 ui.show_flash()
 
 
-def _vider_grille(cle: str) -> None:
-    st.session_state.pop(cle, None)
+# =====================================================================
+# TABLEAU DE BORD
+# =====================================================================
+def render_dashboard() -> None:
+    st.markdown("### 📊 Tableau de bord")
+    ajd = repository.maintenant_local().date()
+    c1, c2, c3 = st.columns([2, 2, 2])
+    dmin = c1.date_input("Du", value=ajd - datetime.timedelta(days=30))
+    dmax = c2.date_input("Au", value=ajd)
+    portee = c3.selectbox("Périmètre", ["Tous", "Achat", "Vente"])
+
+    try:
+        df = repository.lire_bl_pour_dashboard(dmin, dmax).reset_index(drop=True)
+    except Exception as e:
+        st.error(f"Erreur de lecture de la base : {e}")
+        st.stop()
+
+    if portee == "Achat":
+        df = df[df["type_operation"].isin(repository.TYPES_ACHAT)]
+    elif portee == "Vente":
+        df = df[df["type_operation"].isin(repository.TYPES_VENTE)]
+
+    total = len(df)
+    est = df["type_operation"]
+    nb_rec = int((est == repository.TYPE_RECEPTION).sum())
+    nb_exp = int((est == repository.TYPE_EXPEDITION).sum())
+    nb_arch = int(est.isin([repository.TYPE_ARCHIVAGE_RECEPTION,
+                            repository.TYPE_ARCHIVAGE_EXPEDITION]).sum())
+    nb_ednok = int(((est == repository.TYPE_RECEPTION) &
+                    (df["statut_bl"] == repository.STATUT_EDI_NOK)).sum())
+    taux = f"{100 * nb_ednok / nb_rec:.0f} %" if nb_rec else "—"
+
+    k = st.columns(6)
+    k[0].metric("BL (total)", total)
+    k[1].metric("Réceptions", nb_rec)
+    k[2].metric("Expéditions", nb_exp)
+    k[3].metric("Archivages", nb_arch)
+    k[4].metric("EDI NOK", nb_ednok)
+    k[5].metric("Taux EDI NOK", taux)
+
+    if df.empty:
+        st.info("Aucun BL sur la période sélectionnée.")
+        return
+
+    st.markdown("#### Volume par jour")
+    tmp = df.dropna(subset=["date_reception"]).copy()
+    tmp["Jour"] = pd.to_datetime(tmp["date_reception"]).dt.date
+    tmp["Sens"] = tmp["type_operation"].map(
+        lambda t: "Achat" if t in repository.TYPES_ACHAT else "Vente")
+    par_jour = (tmp.groupby(["Jour", "Sens"]).size().unstack(fill_value=0)
+                .reindex(columns=["Achat", "Vente"], fill_value=0).sort_index())
+    st.bar_chart(par_jour, color=["#0F62A6", "#43B02A"])
+
+    col_g, col_d = st.columns(2)
+    with col_g:
+        st.markdown("#### Top fournisseurs / clients")
+        top = (df["nom_fournisseur"].fillna("—").value_counts().head(8)
+               .rename_axis("Tiers").rename("BL").to_frame())
+        st.bar_chart(top, horizontal=True, color="#0F62A6")
+    with col_d:
+        st.markdown("#### Réceptions : OK vs EDI NOK")
+        rec = df[df["type_operation"] == repository.TYPE_RECEPTION]
+        if rec.empty:
+            st.caption("Aucune réception sur la période.")
+        else:
+            etat = (rec["statut_bl"].map({repository.STATUT_OK: "OK",
+                                          repository.STATUT_EDI_NOK: "EDI NOK"})
+                    .fillna("—").value_counts().rename_axis("État").rename("BL").to_frame())
+            st.bar_chart(etat, horizontal=True, color="#E4572E")
 
 
 # =====================================================================
@@ -110,15 +200,10 @@ def dialog_modifier_bl(bl: dict, ids_photos: list[str], cle_grille: str):
                 st.error(str(e))
                 st.stop()
             if passe_a_ok:
-                envoye = notifications.notifier_passage_ok(
-                    numero_bl=champs["numero_bl"], fournisseur=nouveau_tiers,
-                    quai=champs.get("quai_reception", ""), date_reception=date_op,
-                    utilisateur=utilisateur,
-                )
-                ui.set_flash("success" if envoye else "warning",
-                             f"BL {champs['numero_bl']} mis à jour"
-                             + (" — passage à OK notifié par email." if envoye
-                                else " — notification email non envoyée (voir les logs)."))
+                _journaliser_passage_ok(champs["numero_bl"], nouveau_tiers,
+                                        champs.get("quai_reception"), date_op)
+                ui.set_flash("success", f"BL {champs['numero_bl']} mis à jour — "
+                                        "passage à OK journalisé (Gestion ▸ Notifications).")
             else:
                 ui.set_flash("success", f"BL {champs['numero_bl']} mis à jour.")
             _vider_grille(cle_grille)
@@ -154,7 +239,8 @@ def dialog_supprimer_bls(ids: list[str], cle_grille: str):
 # =====================================================================
 def vue_bl(nom_vue: str, types: list[str]) -> None:
     avec_statut = repository.TYPE_RECEPTION in types
-    tiers_lib = "Client" if types == repository.TYPES_VENTE else "Fournisseur"
+    achat = types == repository.TYPES_ACHAT
+    tiers_lib = "Fournisseur" if achat else "Client"
 
     # --- Filtres ---
     with st.expander("🔍 Filtres", expanded=False):
@@ -167,11 +253,17 @@ def vue_bl(nom_vue: str, types: list[str]) -> None:
         f_dmax = c2.date_input("Au", value=aujourdhui, key=f"f_dmax_{nom_vue}")
         f_statut = (c3.selectbox("État", ["EDI NOK", "OK", "Tous"], key=f"f_st_{nom_vue}")
                     if avec_statut else "Tous")
+        if achat:
+            gest_options = [""] + repository.lister_gestionnaires()
+            f_gest = c3.selectbox("Gestionnaire", gest_options,
+                                  format_func=lambda g: g or "Tous", key=f"f_gest_{nom_vue}")
+        else:
+            f_gest = ""
         f_suppr = c3.checkbox("Inclure les BL supprimés", key=f"f_sup_{nom_vue}")
     statut = {"OK": repository.STATUT_OK, "EDI NOK": repository.STATUT_EDI_NOK}.get(f_statut)
 
     # Pagination et sélection réinitialisées quand les filtres changent.
-    signature = (f_numero, f_tiers, str(f_dmin), str(f_dmax), f_statut, f_suppr)
+    signature = (f_numero, f_tiers, str(f_dmin), str(f_dmax), f_statut, f_gest, f_suppr)
     cle_page, cle_grille = f"page_{nom_vue}", f"grille_{nom_vue}"
     if st.session_state.get(f"sig_{nom_vue}") != signature:
         st.session_state[f"sig_{nom_vue}"] = signature
@@ -182,7 +274,7 @@ def vue_bl(nom_vue: str, types: list[str]) -> None:
     try:
         df, total = repository.rechercher_bl(
             numero=f_numero, fournisseur=f_tiers, types=types,
-            date_min=f_dmin, date_max=f_dmax, statut=statut,
+            date_min=f_dmin, date_max=f_dmax, statut=statut, gestionnaire=f_gest,
             inclure_supprimes=f_suppr, page=page, page_size=TAILLE_PAGE,
         )
         df = df.reset_index(drop=True)
@@ -245,8 +337,8 @@ def vue_bl(nom_vue: str, types: list[str]) -> None:
     # --- Ruban d'actions contextuel ---
     with ruban:
         n = len(ids_selection)
-        libelles_boutons = [1.2, 1.2, 1.5, 1.3, 1.3, 3.2] if avec_statut else [1.2, 1.2, 1.3, 1.3, 4.7]
-        cols = st.columns(libelles_boutons)
+        largeurs = [1.2, 1.2, 1.5, 1.3, 1.3, 3.2] if avec_statut else [1.2, 1.2, 1.3, 1.3, 4.7]
+        cols = st.columns(largeurs)
         if cols[0].button("🔄 Actualiser", key=f"act_{nom_vue}", use_container_width=True):
             _vider_grille(cle_grille)
             st.rerun()
@@ -260,20 +352,17 @@ def vue_bl(nom_vue: str, types: list[str]) -> None:
             if cols[2].button("✅ Passer à OK", key=f"ok_{nom_vue}", disabled=n == 0,
                               use_container_width=True,
                               help="Passe les BL EDI NOK sélectionnés à OK (avec notification)."):
-                bascules, notifies = 0, 0
+                bascules = 0
                 for id_bl in ids_selection:
                     ligne = df[df["id_bl"] == id_bl].iloc[0]
                     if ligne["statut_bl"] != repository.STATUT_EDI_NOK:
                         continue
                     repository.mettre_a_jour_bl(id_bl, {"statut_bl": repository.STATUT_OK}, utilisateur)
+                    _journaliser_passage_ok(ligne["numero_bl"], ligne["nom_fournisseur"],
+                                            ligne["quai_reception"], ligne["date_reception"])
                     bascules += 1
-                    if notifications.notifier_passage_ok(
-                            numero_bl=ligne["numero_bl"], fournisseur=ligne["nom_fournisseur"],
-                            quai=ligne["quai_reception"] or "", date_reception=ligne["date_reception"],
-                            utilisateur=utilisateur):
-                        notifies += 1
                 ui.set_flash("success" if bascules else "info",
-                             f"{bascules} BL passé(s) à OK, {notifies} notification(s) envoyée(s)."
+                             f"{bascules} BL passé(s) à OK — notification(s) journalisée(s)."
                              if bascules else "Aucun BL EDI NOK dans la sélection.")
                 _vider_grille(cle_grille)
                 st.rerun()
@@ -292,23 +381,28 @@ def vue_bl(nom_vue: str, types: list[str]) -> None:
 
 
 # =====================================================================
-# VUES « RÉFÉRENTIEL » — grille éditable (CRUD complet)
+# VUES « RÉFÉRENTIEL » simples — grille éditable (CRUD complet)
 # =====================================================================
 def vue_referentiel(nom_ref: str, nom_vue: str, valeurs_fixes: dict | None = None,
-                    config_colonnes: dict | None = None) -> None:
-    try:
-        df = repository.lire_referentiel(nom_ref, valeurs_fixes)
-    except Exception as e:
-        st.error(f"Erreur de lecture de la base : {e}")
-        st.stop()
-    visibles = [c for c in df.columns if c not in (valeurs_fixes or {})]
-    df_vis = df[visibles].reset_index(drop=True)
+                    config_colonnes: dict | None = None,
+                    df_charge: pd.DataFrame | None = None) -> None:
+    if df_charge is None:
+        try:
+            df = repository.lire_referentiel(nom_ref, valeurs_fixes)
+        except Exception as e:
+            st.error(f"Erreur de lecture de la base : {e}")
+            st.stop()
+        visibles = [c for c in df.columns if c not in (valeurs_fixes or {})]
+        df = df[visibles]
+    else:
+        df = df_charge
+    df = df.reset_index(drop=True)
     cle = f"ref_{nom_vue}"
 
-    ruban = st.container()                     # rempli après la grille
+    ruban = st.container()
     st.caption("Ajoutez une ligne en bas de la grille, modifiez une cellule ou supprimez des "
                "lignes (sélection + touche Suppr), puis cliquez sur **💾 Enregistrer**.")
-    edite = st.data_editor(df_vis, num_rows="dynamic", use_container_width=True,
+    edite = st.data_editor(df, num_rows="dynamic", use_container_width=True,
                            key=cle, hide_index=True, column_config=config_colonnes or {})
 
     with ruban:
@@ -317,7 +411,7 @@ def vue_referentiel(nom_ref: str, nom_vue: str, valeurs_fixes: dict | None = Non
                      use_container_width=True):
             try:
                 ajouts, suppressions = repository.sauver_referentiel(
-                    nom_ref, df_vis, edite, valeurs_fixes)
+                    nom_ref, df, edite, valeurs_fixes)
                 if ajouts or suppressions:
                     ui.set_flash("success",
                                  f"{nom_vue} : {ajouts} ajout(s)/modification(s), "
@@ -333,32 +427,143 @@ def vue_referentiel(nom_ref: str, nom_vue: str, valeurs_fixes: dict | None = Non
         if c2.button("🔄 Actualiser", key=f"refresh_{nom_vue}", use_container_width=True):
             _vider_grille(cle)
             st.rerun()
-        c3.markdown(f"**{len(df_vis)}** enregistrement(s)")
+        c3.markdown(f"**{len(df)}** enregistrement(s)")
 
 
 # =====================================================================
-# ROUTAGE DES VUES
+# VUE « DESADV » — filtres + grille éditable (horodatages en lecture)
 # =====================================================================
-if vue == "BL réception":
+def vue_desadv(sens: str) -> None:
+    achat = sens == repository.SENS_ACHAT
+    tiers_lib = "Fournisseur" if achat else "Client"
+    type_tiers = repository.TIERS_FOURNISSEUR if achat else repository.TIERS_CLIENT
+    suffixe = sens.lower()
+
+    with st.expander("🔍 Filtres", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        f_num = c1.text_input("Numéro de BL contient", key=f"dnum_{suffixe}").strip()
+        f_frs = c2.text_input(f"{tiers_lib} contient", key=f"dfrs_{suffixe}").strip()
+        if achat:
+            gest_options = [""] + repository.lister_gestionnaires()
+            f_gest = c3.selectbox("Gestionnaire", gest_options,
+                                  format_func=lambda g: g or "Tous", key=f"dgest_{suffixe}")
+        else:
+            f_gest = ""
+        f_dmin = c1.date_input("Intégré du", value=None, key=f"ddmin_{suffixe}")
+        f_dmax = c2.date_input("Intégré au", value=None, key=f"ddmax_{suffixe}")
+
+    try:
+        df = repository.lire_desadv(sens, f_num, f_frs, f_gest, f_dmin, f_dmax).reset_index(drop=True)
+    except Exception as e:
+        st.error(f"Erreur de lecture de la base : {e}")
+        st.stop()
+
+    cle = f"desadv_{suffixe}"
+    ruban = st.container()
+    st.caption("Ajoutez / modifiez / supprimez des lignes (numéro de BL unique par sens), "
+               "puis **💾 Enregistrer**. « Créé le » et « Date d'intégration » proviennent "
+               "du flux EDI (lecture seule).")
+    edite = st.data_editor(
+        df, num_rows="dynamic", use_container_width=True, key=cle, hide_index=True,
+        column_config={
+            "numero_bl": st.column_config.TextColumn("Numéro de BL", required=True),
+            "nom_fournisseur": st.column_config.SelectboxColumn(
+                tiers_lib, options=repository.lister_tiers(type_tiers), required=True),
+            "issuedatetime": st.column_config.DatetimeColumn("Créé le", disabled=True),
+            "integrationdate": st.column_config.DateColumn("Date d'intégration", disabled=True),
+        })
+
+    with ruban:
+        c1, c2, c3 = st.columns([1.6, 1.4, 5])
+        if c1.button("💾 Enregistrer", type="primary", key=f"save_{cle}", use_container_width=True):
+            try:
+                ajouts, suppressions = repository.sauver_referentiel(
+                    "desadv", df, edite, {"sens": sens})
+                ui.set_flash("success", f"DESADV {sens} : {ajouts} ajout(s)/modification(s), "
+                                        f"{suppressions} suppression(s)."
+                             if (ajouts or suppressions) else "Aucune modification.")
+                _vider_grille(cle)
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
+            except Exception as e:
+                st.error(f"Échec de l'enregistrement : {e}")
+        if c2.button("🔄 Actualiser", key=f"refresh_{cle}", use_container_width=True):
+            _vider_grille(cle)
+            st.rerun()
+        c3.markdown(f"**{len(df)}** avis d'expédition")
+
+
+# =====================================================================
+# VUE « PORTEFEUILLES » — filtres + grille éditable
+# =====================================================================
+def vue_portefeuilles() -> None:
+    with st.expander("🔍 Filtres", expanded=False):
+        c1, c2 = st.columns(2)
+        gest_options = [""] + repository.lister_gestionnaires()
+        f_gest = c1.selectbox("Gestionnaire", gest_options,
+                              format_func=lambda g: g or "Tous", key="pf_gest")
+        f_frs = c2.text_input("Fournisseur contient", key="pf_frs").strip()
+    try:
+        df = repository.lire_portefeuilles(f_gest, f_frs)
+    except Exception as e:
+        st.error(f"Erreur de lecture de la base : {e}")
+        st.stop()
+    vue_referentiel(
+        "portefeuilles", "Portefeuilles", df_charge=df,
+        config_colonnes={
+            "code_gestionnaire": st.column_config.SelectboxColumn(
+                "Gestionnaire", options=repository.lister_gestionnaires(), required=True),
+            "nom_fournisseur": st.column_config.SelectboxColumn(
+                "Fournisseur", options=repository.lister_tiers(repository.TIERS_FOURNISSEUR),
+                required=True),
+        })
+
+
+# =====================================================================
+# VUE « NOTIFICATIONS » (lecture seule)
+# =====================================================================
+def vue_notifications() -> None:
+    try:
+        df = repository.lister_notifications()
+    except Exception as e:
+        st.error(f"Erreur de lecture de la base : {e}")
+        st.stop()
+    if st.button("🔄 Actualiser", key="notif_refresh"):
+        st.rerun()
+    if df is None or df.empty:
+        st.info("Aucune notification pour l'instant.")
+        return
+    st.dataframe(
+        df, hide_index=True, use_container_width=True,
+        column_config={
+            "cree_le": st.column_config.DatetimeColumn("Date"),
+            "type_notif": st.column_config.TextColumn("Type"),
+            "numero_bl": st.column_config.TextColumn("N° BL"),
+            "message": st.column_config.TextColumn("Message", width="large"),
+            "cree_par": st.column_config.TextColumn("Par"),
+            "envoyee": st.column_config.CheckboxColumn("Envoyée"),
+        })
+    st.caption("Journal en lecture seule. Un flux Power Automate pourra envoyer ces "
+               "notifications par email ultérieurement.")
+
+
+# =====================================================================
+# ROUTAGE
+# =====================================================================
+if module:
+    st.markdown(f"### {ICONES[module]} {module} › {vue}")
+
+if espace == ESPACE_DASHBOARD:
+    render_dashboard()
+elif vue == "BL réception":
     vue_bl(vue, repository.TYPES_ACHAT)
 elif vue == "BL expédition":
     vue_bl(vue, repository.TYPES_VENTE)
 elif vue == "DESADV achat":
-    vue_referentiel("desadv", vue, valeurs_fixes={"sens": repository.SENS_ACHAT},
-                    config_colonnes={
-                        "numero_bl": st.column_config.TextColumn("Numéro de BL", required=True),
-                        "nom_fournisseur": st.column_config.SelectboxColumn(
-                            "Fournisseur", options=repository.lister_tiers(repository.TIERS_FOURNISSEUR),
-                            required=True),
-                    })
+    vue_desadv(repository.SENS_ACHAT)
 elif vue == "DESADV vente":
-    vue_referentiel("desadv", vue, valeurs_fixes={"sens": repository.SENS_VENTE},
-                    config_colonnes={
-                        "numero_bl": st.column_config.TextColumn("Numéro de BL", required=True),
-                        "nom_fournisseur": st.column_config.SelectboxColumn(
-                            "Client", options=repository.lister_tiers(repository.TIERS_CLIENT),
-                            required=True),
-                    })
+    vue_desadv(repository.SENS_VENTE)
 elif vue == "Fournisseurs":
     vue_referentiel("tiers", vue, valeurs_fixes={"type_tiers": repository.TIERS_FOURNISSEUR},
                     config_colonnes={"name": st.column_config.TextColumn("Fournisseur", required=True)})
@@ -370,14 +575,9 @@ elif vue == "Gestionnaires":
                     config_colonnes={"code_gestionnaire":
                                      st.column_config.TextColumn("Code gestionnaire", required=True)})
 elif vue == "Portefeuilles":
-    vue_referentiel("portefeuilles", vue,
-                    config_colonnes={
-                        "code_gestionnaire": st.column_config.SelectboxColumn(
-                            "Gestionnaire", options=repository.lister_gestionnaires(), required=True),
-                        "nom_fournisseur": st.column_config.SelectboxColumn(
-                            "Fournisseur", options=repository.lister_tiers(repository.TIERS_FOURNISSEUR),
-                            required=True),
-                    })
+    vue_portefeuilles()
 elif vue == "Quais":
     vue_referentiel("quais", vue,
                     config_colonnes={"code_quai": st.column_config.TextColumn("Code quai", required=True)})
+elif vue == "Notifications":
+    vue_notifications()
