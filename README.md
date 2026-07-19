@@ -29,15 +29,27 @@ exemple `bl-creation-v3` et `bl-administration-v3`) pour ne pas écraser la V2.
   « 📎 Attacher au BL ».
 
 **App Administration — expérience « model-driven »**
+- **Logo eMotors** en haut de la barre latérale (navigation plus grande et
+  aérée, vues indentées sous le module sélectionné).
+- **Tableau de bord** interactif (entrée en haut, avant les modules) : KPI
+  (BL total, réceptions, expéditions, archivages, EDI NOK, taux) et
+  graphiques (volume/jour achat vs vente, top tiers, OK vs EDI NOK),
+  filtrables par plage de dates et périmètre.
 - Navigation latérale par modules : **Achat** (BL réception, DESADV achat,
   Fournisseurs), **Vente** (BL expédition, DESADV vente, Clients),
-  **Gestion** (Gestionnaires, Portefeuilles, Quais).
-- Ruban d'actions contextuel au-dessus de chaque grille.
-- Vues BL : grande grille avec cases à cocher pour les actions de masse
-  (passer à OK + email, supprimer, restaurer), fiche de modification en boîte
-  de dialogue avec aperçu des pages. 50 lignes par page, plus de filtre quai.
-- Vues référentiels : grille éditable (ajout / modification / suppression de
-  lignes) + bouton Enregistrer — CRUD complet.
+  **Gestion** (Gestionnaires, Portefeuilles, Quais, **Notifications**).
+- Vues BL : grille avec cases à cocher pour les actions de masse (passer à OK,
+  supprimer, restaurer), fiche de modification en boîte de dialogue. 50 lignes
+  par page. **BL réception** filtrable par **gestionnaire**.
+- **DESADV** : colonnes « Créé le » et « Date d'intégration » (flux EDI) ;
+  filtres numéro de BL, tiers, gestionnaire et dates ; numéro de BL **unique**
+  par sens (doublons interdits).
+- **Portefeuilles** filtrables par gestionnaire et fournisseur.
+- **Notifications** : journal en lecture seule des passages EDI NOK → OK
+  (l'email a été remplacé par cet enregistrement en base ; un flux Power
+  Automate pourra les envoyer ultérieurement).
+- Vues référentiels : grille éditable (ajout / modification / suppression) +
+  bouton Enregistrer — CRUD complet.
 
 ## Déploiement pas à pas
 
@@ -57,11 +69,16 @@ exemple `bl-creation-v3` et `bl-administration-v3`) pour ne pas écraser la V2.
    `<SP_APP_CREATION>` / `<SP_APP_ADMINISTRATION>` dans
    `sql/init_lakebase.sql`, décommenter les GRANT, puis exécuter le script
    dans l'**éditeur SQL du projet Lakebase V3** (pas l'éditeur Spark).
+   - **Environnement déjà déployé** (schéma bl_demat antérieur) : exécuter
+     aussi `sql/migration_notifications_desadv.sql` (table notifications,
+     colonnes/contrainte DESADV) avec les GRANT correspondants.
 5. **Tester** : `BL-2026-0001` auto-remplit le fournisseur FRN1 (DESADV achat
    d'exemple), `EXP-2026-0001` auto-remplit CLIENT ALPHA en expédition.
    Optionnel : `sql/seed_fake_bl.sql` insère 30 BL fictifs avec photos.
-6. **Email EDI NOK → OK** : configurer le SMTP dans
-   `src/app_administration/app.yaml` (mot de passe via secret).
+6. **Référentiels ERP** : le job `jobs/` synchronise fournisseurs, clients et
+   DESADV achat depuis l'ERP (voir `jobs/README.md`). Les notifications
+   EDI NOK → OK sont journalisées dans la table `notifications` (Gestion ▸
+   Notifications) ; un flux Power Automate pourra les envoyer par email.
 
 ## Notes d'exploitation
 
