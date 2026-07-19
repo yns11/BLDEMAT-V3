@@ -63,12 +63,17 @@ CREATE TABLE IF NOT EXISTS bl_demat.base_tiers (
 -- ----------------------------------------------------------------------------
 -- Table 4 : base_desadv — avis d'expédition, séparés achat (entrant) / vente
 -- (sortant). L'app Création interroge le bon sens selon le type d'opération.
+-- Clé primaire (numero_bl, sens) : un numéro de BL ne peut apparaître qu'UNE
+-- fois par sens (doublons interdits). issuedatetime / integrationdate viennent
+-- du flux EDI (job de synchronisation).
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS bl_demat.base_desadv (
   numero_bl       TEXT NOT NULL,
   nom_fournisseur TEXT NOT NULL,             -- fournisseur (ACHAT) ou client (VENTE)
   sens            TEXT NOT NULL CHECK (sens IN ('ACHAT', 'VENTE')),
-  PRIMARY KEY (numero_bl, nom_fournisseur, sens)
+  issuedatetime   TIMESTAMPTZ,               -- date de création EDI (issuedatetime)
+  integrationdate DATE,                      -- date d'intégration
+  PRIMARY KEY (numero_bl, sens)
 );
 
 -- ----------------------------------------------------------------------------
@@ -96,6 +101,23 @@ CREATE TABLE IF NOT EXISTS bl_demat.quais (
 );
 
 -- ----------------------------------------------------------------------------
+-- Table 8 : notifications — journal des événements notifiables (ex. passage
+-- d'un BL de EDI NOK à OK). Écrites par l'app Administration, affichées en
+-- lecture (Gestion -> Notifications). Un flux Power Automate pourra les
+-- consommer pour un envoi email ultérieur.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS bl_demat.notifications (
+  id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  type_notif TEXT,                           -- ex. 'EDI_NOK_OK'
+  numero_bl  TEXT,
+  message    TEXT NOT NULL,
+  cree_le    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  cree_par   TEXT,
+  envoyee    BOOLEAN NOT NULL DEFAULT false   -- réservé à un futur flux d'envoi
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_cree_le ON bl_demat.notifications (cree_le DESC);
+
+-- ----------------------------------------------------------------------------
 -- Données initiales / d'exemple — idempotent.
 -- ----------------------------------------------------------------------------
 INSERT INTO bl_demat.quais (code_quai)
@@ -113,11 +135,11 @@ VALUES ('FRN1', 'FOURNISSEUR'), ('FRN2', 'FOURNISSEUR'),
        ('CLIENT ALPHA', 'CLIENT'), ('CLIENT BETA', 'CLIENT')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO bl_demat.base_desadv (numero_bl, nom_fournisseur, sens)
-VALUES ('BL-2026-0001', 'FRN1', 'ACHAT'),
-       ('BL-2026-0002', 'TRANSPORTS DUPONT', 'ACHAT'),
-       ('EXP-2026-0001', 'CLIENT ALPHA', 'VENTE')
-ON CONFLICT DO NOTHING;
+INSERT INTO bl_demat.base_desadv (numero_bl, nom_fournisseur, sens, issuedatetime, integrationdate)
+VALUES ('BL-2026-0001', 'FRN1', 'ACHAT', now() - interval '2 days', (now() - interval '2 days')::date),
+       ('BL-2026-0002', 'TRANSPORTS DUPONT', 'ACHAT', now() - interval '1 day', (now() - interval '1 day')::date),
+       ('EXP-2026-0001', 'CLIENT ALPHA', 'VENTE', now(), now()::date)
+ON CONFLICT (numero_bl, sens) DO NOTHING;
 
 INSERT INTO bl_demat.portefeuilles (code_gestionnaire, nom_fournisseur)
 VALUES ('appro 1', 'FRN1'), ('appro 1', 'FRN2'), ('appro 2', 'TRANSPORTS DUPONT')
@@ -131,8 +153,9 @@ ON CONFLICT DO NOTHING;
 -- GRANT SELECT, INSERT ON bl_demat.suivi_bl, bl_demat.pieces_jointes_bl TO "<SP_APP_CREATION>";
 -- GRANT SELECT ON bl_demat.base_tiers, bl_demat.base_desadv, bl_demat.quais TO "<SP_APP_CREATION>";
 
--- App Administration : CRUD complet sur toutes les vues.
+-- App Administration : CRUD complet sur toutes les vues + notifications.
 -- GRANT USAGE ON SCHEMA bl_demat TO "<SP_APP_ADMINISTRATION>";
 -- GRANT SELECT, INSERT, UPDATE, DELETE ON bl_demat.suivi_bl, bl_demat.pieces_jointes_bl,
 --   bl_demat.base_tiers, bl_demat.base_desadv, bl_demat.gestionnaires,
---   bl_demat.portefeuilles, bl_demat.quais TO "<SP_APP_ADMINISTRATION>";
+--   bl_demat.portefeuilles, bl_demat.quais, bl_demat.notifications TO "<SP_APP_ADMINISTRATION>";
+-- GRANT USAGE, SELECT ON SEQUENCE bl_demat.notifications_id_seq TO "<SP_APP_ADMINISTRATION>";
