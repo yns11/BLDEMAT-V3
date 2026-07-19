@@ -72,12 +72,30 @@ def injecter_style() -> None:
         }
         [data-testid="stSidebar"] * { color: #E8EFF7 !important; }
         [data-testid="stSidebar"] hr { border-color: rgba(232, 239, 247, 0.25); }
+        /* Items de navigation : plus grands et plus aérés (libellés/icônes
+           inchangés, seule la taille de police et l'espacement augmentent). */
         [data-testid="stSidebar"] label[data-baseweb="radio"] {
-            padding: 0.15rem 0.4rem;
-            border-radius: 8px;
+            padding: 0.5rem 0.6rem;
+            margin: 0.12rem 0;
+            border-radius: 9px;
+        }
+        [data-testid="stSidebar"] label[data-baseweb="radio"] div[data-testid="stMarkdownContainer"] p {
+            font-size: 1.12rem;
+            line-height: 1.5;
+            font-weight: 600;
         }
         [data-testid="stSidebar"] label[data-baseweb="radio"]:hover {
             background: rgba(255, 255, 255, 0.08);
+        }
+        /* Vues indentées sous le module sélectionné (colonne de nesting) */
+        [data-testid="stSidebar"] .bl-nested {
+            border-left: 2px solid rgba(67, 176, 42, 0.55);
+            margin-left: 0.35rem;
+            padding-left: 0.25rem;
+        }
+        [data-testid="stSidebar"] .bl-nested label[data-baseweb="radio"] div[data-testid="stMarkdownContainer"] p {
+            font-size: 1.02rem;
+            font-weight: 500;
         }
         /* Grilles de données : cadre net */
         [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
@@ -86,6 +104,34 @@ def injecter_style() -> None:
         }
         </style>
         """,
+        unsafe_allow_html=True,
+    )
+
+
+# Logo eMotors — recréation SVG (navy/vert de la charte) pensée pour un fond
+# sombre (barre latérale) : E stylisé + « EMOTORS », E vert. Remplaçable par le
+# fichier officiel si besoin (garder le même appel afficher_logo()).
+LOGO_EMOTORS_SVG = """
+<svg viewBox="0 0 250 66" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="eMotors"
+     style="width:88%;max-width:210px;height:auto;display:block;margin:0.2rem auto 0.4rem;">
+  <g transform="translate(4,6) skewX(-9)">
+    <rect x="0"  y="0"  width="15" height="54" rx="3" fill="#FFFFFF"/>
+    <rect x="0"  y="0"  width="46" height="14" rx="3" fill="#FFFFFF"/>
+    <rect x="0"  y="20" width="34" height="13" rx="3" fill="#FFFFFF"/>
+    <rect x="0"  y="40" width="46" height="14" rx="3" fill="#FFFFFF"/>
+  </g>
+  <text x="70" y="46" font-family="Segoe UI, Arial, sans-serif" font-size="34"
+        font-weight="800" letter-spacing="-1">
+    <tspan fill="#43B02A">E</tspan><tspan fill="#FFFFFF">MOTORS</tspan>
+  </text>
+</svg>
+"""
+
+
+def afficher_logo() -> None:
+    """Logo eMotors en haut de la barre latérale (haut à gauche de l'app)."""
+    st.markdown(
+        f'<div style="padding:0.2rem 0 0.6rem;">{LOGO_EMOTORS_SVG}</div>',
         unsafe_allow_html=True,
     )
 
