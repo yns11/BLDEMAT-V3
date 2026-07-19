@@ -248,22 +248,29 @@ def vider_caches_referentiels() -> None:
 # Les tables sont sur liste blanche ; le diff avant/après est calculé sur les
 # lignes complètes (tous nos référentiels sont entièrement clés).
 # ---------------------------------------------------------------------------
+# « colonnes » = colonnes ÉCRITES par le CRUD ; « cles » = clé primaire
+# (une ligne est valide si ses colonnes-clés sont renseignées ; les autres
+# colonnes écrites peuvent être vides -> NULL). Les colonnes d'affichage seul
+# (ex. horodatages DESADV venus de l'ERP) sont gérées par les lectures dédiées.
 REFERENTIELS = {
-    "tiers": {"table": "base_tiers", "colonnes": ["name", "type_tiers"]},
-    "desadv": {"table": "base_desadv", "colonnes": ["numero_bl", "nom_fournisseur", "sens"]},
-    "gestionnaires": {"table": "gestionnaires", "colonnes": ["code_gestionnaire"]},
-    "portefeuilles": {"table": "portefeuilles", "colonnes": ["code_gestionnaire", "nom_fournisseur"]},
-    "quais": {"table": "quais", "colonnes": ["code_quai"]},
+    "tiers": {"table": "base_tiers", "colonnes": ["name", "type_tiers"], "cles": ["name"]},
+    "desadv": {"table": "base_desadv", "colonnes": ["numero_bl", "nom_fournisseur", "sens"],
+               "cles": ["numero_bl", "sens"]},
+    "gestionnaires": {"table": "gestionnaires", "colonnes": ["code_gestionnaire"],
+                      "cles": ["code_gestionnaire"]},
+    "portefeuilles": {"table": "portefeuilles", "colonnes": ["code_gestionnaire", "nom_fournisseur"],
+                      "cles": ["code_gestionnaire", "nom_fournisseur"]},
+    "quais": {"table": "quais", "colonnes": ["code_quai"], "cles": ["code_quai"]},
 }
 
 
-def _table_referentiel(nom: str) -> tuple[str, list[str]]:
+def _table_referentiel(nom: str) -> tuple[str, list[str], list[str]]:
     cfg = REFERENTIELS[nom]  # KeyError = bug d'appel, pas une entrée utilisateur
-    return f"{get_settings().pg_schema}.{cfg['table']}", cfg["colonnes"]
+    return f"{get_settings().pg_schema}.{cfg['table']}", cfg["colonnes"], cfg["cles"]
 
 
 def lire_referentiel(nom: str, filtres: Optional[dict] = None) -> pd.DataFrame:
-    table, colonnes = _table_referentiel(nom)
+    table, colonnes, _ = _table_referentiel(nom)
     filtres = {k: v for k, v in (filtres or {}).items() if k in colonnes}
     where = " AND ".join(f"{c} = %({c})s" for c in filtres) or "1=1"
     ordre = ", ".join(colonnes)
@@ -271,37 +278,57 @@ def lire_referentiel(nom: str, filtres: Optional[dict] = None) -> pd.DataFrame:
                 params=filtres, fetch=True)
 
 
-def _lignes_normalisees(df: pd.DataFrame, colonnes: list[str]) -> set[tuple]:
-    lignes = set()
+def _norme(valeur) -> str:
+    """Valeur de cellule -> chaîne comparable ('' pour vide/None/NaN)."""
+    if valeur is None:
+        return ""
+    txt = str(valeur).strip()
+    return "" if txt.lower() in ("", "nan", "none", "nat") else txt
+
+
+def _indexer(df: pd.DataFrame, visibles: list[str], cles_visibles: list[str],
+             detecter_doublons: bool = False) -> dict:
+    """{ clé -> ligne complète } pour les lignes dont toutes les colonnes-clés
+    sont renseignées (lignes incomplètes en cours de saisie ignorées).
+    detecter_doublons=True (grille éditée) : refuse deux lignes de même clé."""
+    index = {}
     for _, ligne in df.iterrows():
-        valeurs = tuple(str(ligne[c]).strip() if ligne[c] is not None else "" for c in colonnes)
-        if all(valeurs):                     # lignes incomplètes (en cours de saisie) ignorées
-            lignes.add(valeurs)
-    return lignes
+        cle = tuple(_norme(ligne.get(c)) for c in cles_visibles)
+        if all(cle):
+            if detecter_doublons and cle in index:
+                raise ValueError(
+                    "Opération refusée : doublon dans la grille pour "
+                    f"« {' / '.join(cle)} » (chaque clé doit être unique).")
+            index[cle] = tuple(_norme(ligne.get(c)) for c in visibles)
+    return index
 
 
 def sauver_referentiel(nom: str, df_avant: pd.DataFrame, df_apres: pd.DataFrame,
                        valeurs_fixes: Optional[dict] = None) -> tuple[int, int]:
-    """Applique le diff avant/après d'un éditeur de données : suppressions puis
-    insertions (une modification = suppression + insertion). `valeurs_fixes`
-    porte les colonnes masquées à l'écran (ex. sens='ACHAT').
-    Retourne (nb_ajouts, nb_suppressions)."""
-    table, colonnes = _table_referentiel(nom)
+    """Applique le diff avant/après d'un éditeur de données. Une ligne modifiée
+    (même clé, contenu changé) = suppression puis réinsertion. `valeurs_fixes`
+    porte les colonnes masquées à l'écran (ex. sens='ACHAT'). df_avant est le
+    jeu chargé (éventuellement filtré) : les lignes non chargées ne sont jamais
+    touchées. Retourne (nb_ajouts/modifications, nb_suppressions)."""
+    table, colonnes, cles = _table_referentiel(nom)
     valeurs_fixes = valeurs_fixes or {}
     visibles = [c for c in colonnes if c not in valeurs_fixes]
+    cles_visibles = [c for c in cles if c not in valeurs_fixes]
 
-    avant = _lignes_normalisees(df_avant, visibles)
-    apres = _lignes_normalisees(df_apres, visibles)
-    a_supprimer = avant - apres
-    a_inserer = apres - avant
+    avant = _indexer(df_avant, visibles, cles_visibles)
+    apres = _indexer(df_apres, visibles, cles_visibles, detecter_doublons=True)
+
+    cles_a_supprimer = {k for k in avant if k not in apres or apres[k] != avant[k]}
+    cles_a_inserer = {k for k in apres if k not in avant or apres[k] != avant[k]}
 
     try:
-        for valeurs in a_supprimer:
-            params = dict(zip(visibles, valeurs)) | valeurs_fixes
+        for cle in cles_a_supprimer:
+            params = dict(zip(cles_visibles, cle)) | valeurs_fixes
             where = " AND ".join(f"{c} = %({c})s" for c in params)
             _run(f"DELETE FROM {table} WHERE {where}", params=params)
-        for valeurs in a_inserer:
-            params = dict(zip(visibles, valeurs)) | valeurs_fixes
+        for cle in cles_a_inserer:
+            valeurs = dict(zip(visibles, apres[cle]))
+            params = {c: (v if v != "" else None) for c, v in valeurs.items()} | valeurs_fixes
             cols = ", ".join(params)
             marqueurs = ", ".join(f"%({c})s" for c in params)
             _run(f"INSERT INTO {table} ({cols}) VALUES ({marqueurs})", params=params)
@@ -311,10 +338,112 @@ def sauver_referentiel(nom: str, df_avant: pd.DataFrame, df_apres: pd.DataFrame,
             "(portefeuille, BL...) ou référence une entrée inexistante."
         ) from None
     except psycopg.errors.UniqueViolation:
-        raise ValueError("Opération refusée : cette entrée existe déjà.") from None
+        raise ValueError(
+            "Opération refusée : ce numéro de BL / cette entrée existe déjà "
+            "(doublon interdit)."
+        ) from None
 
     vider_caches_referentiels()
-    return len(a_inserer), len(a_supprimer)
+    return len(cles_a_inserer), len(cles_a_supprimer)
+
+
+# ---------------------------------------------------------------------------
+# Lectures filtrées des vues (app Administration)
+# ---------------------------------------------------------------------------
+def lire_desadv(sens: str, numero: str = "", fournisseur: str = "",
+                gestionnaire: str = "", date_min: Optional[datetime.date] = None,
+                date_max: Optional[datetime.date] = None) -> pd.DataFrame:
+    """Avis d'expédition d'un sens (ACHAT/VENTE), avec filtres numéro de BL,
+    tiers, gestionnaire (via portefeuille) et plage de dates d'intégration.
+    Renvoie numero_bl, nom_fournisseur, issuedatetime, integrationdate."""
+    s = get_settings()
+    conditions = ["sens = %(sens)s"]
+    params: dict = {"sens": sens}
+    if numero:
+        conditions.append("lower(numero_bl) LIKE %(num)s")
+        params["num"] = f"%{numero.lower()}%"
+    if fournisseur:
+        conditions.append("lower(nom_fournisseur) LIKE %(frs)s")
+        params["frs"] = f"%{fournisseur.lower()}%"
+    if gestionnaire:
+        conditions.append(
+            f"nom_fournisseur IN (SELECT nom_fournisseur FROM {s.pg_schema}.portefeuilles "
+            "WHERE code_gestionnaire = %(gest)s)")
+        params["gest"] = gestionnaire
+    if date_min:
+        conditions.append("integrationdate >= %(dmin)s")
+        params["dmin"] = date_min
+    if date_max:
+        conditions.append("integrationdate <= %(dmax)s")
+        params["dmax"] = date_max
+    where = " AND ".join(conditions)
+    return _run(
+        f"SELECT numero_bl, nom_fournisseur, issuedatetime, integrationdate "
+        f"FROM {s.pg_schema}.base_desadv WHERE {where} "
+        "ORDER BY integrationdate DESC NULLS LAST, numero_bl",
+        params=params, fetch=True)
+
+
+def lire_portefeuilles(gestionnaire: str = "", fournisseur: str = "") -> pd.DataFrame:
+    """Portefeuilles avec filtres gestionnaire et fournisseur."""
+    s = get_settings()
+    conditions = ["1=1"]
+    params: dict = {}
+    if gestionnaire:
+        conditions.append("code_gestionnaire = %(gest)s")
+        params["gest"] = gestionnaire
+    if fournisseur:
+        conditions.append("lower(nom_fournisseur) LIKE %(frs)s")
+        params["frs"] = f"%{fournisseur.lower()}%"
+    where = " AND ".join(conditions)
+    return _run(
+        f"SELECT code_gestionnaire, nom_fournisseur FROM {s.pg_schema}.portefeuilles "
+        f"WHERE {where} ORDER BY code_gestionnaire, nom_fournisseur",
+        params=params, fetch=True)
+
+
+# ---------------------------------------------------------------------------
+# Notifications (journal EDI NOK -> OK ; affichées en lecture dans l'app Admin)
+# ---------------------------------------------------------------------------
+def enregistrer_notification(type_notif: str, numero_bl: str, message: str,
+                             utilisateur: str) -> None:
+    s = get_settings()
+    _run(
+        f"INSERT INTO {s.pg_schema}.notifications (type_notif, numero_bl, message, cree_par) "
+        "VALUES (%(t)s, %(num)s, %(msg)s, %(par)s)",
+        params={"t": type_notif, "num": numero_bl, "msg": message, "par": utilisateur},
+    )
+
+
+def lister_notifications(limite: int = 200) -> pd.DataFrame:
+    s = get_settings()
+    return _run(
+        f"SELECT cree_le, type_notif, numero_bl, message, cree_par, envoyee "
+        f"FROM {s.pg_schema}.notifications ORDER BY cree_le DESC LIMIT %(lim)s",
+        params={"lim": limite}, fetch=True)
+
+
+# ---------------------------------------------------------------------------
+# Tableau de bord (agrégats calculés côté app pour l'interactivité)
+# ---------------------------------------------------------------------------
+def lire_bl_pour_dashboard(date_min: Optional[datetime.date] = None,
+                           date_max: Optional[datetime.date] = None) -> pd.DataFrame:
+    """BL non supprimés (colonnes utiles au tableau de bord), filtrés sur la
+    date d'opération. Les agrégats/KPI sont calculés dans l'app."""
+    s = get_settings()
+    conditions = ["(est_supprime IS NULL OR est_supprime = false)"]
+    params: dict = {}
+    if date_min:
+        conditions.append("date_reception >= %(dmin)s")
+        params["dmin"] = date_min
+    if date_max:
+        conditions.append("date_reception <= %(dmax)s")
+        params["dmax"] = date_max
+    where = " AND ".join(conditions)
+    return _run(
+        f"SELECT id_bl, numero_bl, date_reception, type_operation, statut_bl, "
+        f"nom_fournisseur, saisie_le FROM {s.pg_schema}.suivi_bl WHERE {where}",
+        params=params, fetch=True)
 
 
 # ---------------------------------------------------------------------------
@@ -416,12 +545,14 @@ def rechercher_bl(
     date_min: Optional[datetime.date] = None,
     date_max: Optional[datetime.date] = None,
     statut: Optional[str] = None,
+    gestionnaire: str = "",
     inclure_supprimes: bool = False,
     page: int = 1,
     page_size: int = 50,
 ) -> tuple[pd.DataFrame, int]:
     """Recherche multicritère insensible à la casse, paginée (50 par défaut).
-    `types` restreint aux types d'opération donnés (vue achat / vue vente)."""
+    `types` restreint aux types d'opération donnés (vue achat / vue vente) ;
+    `gestionnaire` filtre les BL dont le fournisseur est dans son portefeuille."""
     s = get_settings()
     conditions = ["1=1"]
     params: dict = {}
@@ -434,6 +565,11 @@ def rechercher_bl(
     if fournisseur:
         conditions.append("lower(nom_fournisseur) LIKE %(frs)s")
         params["frs"] = f"%{fournisseur.lower()}%"
+    if gestionnaire:
+        conditions.append(
+            f"nom_fournisseur IN (SELECT nom_fournisseur FROM {s.pg_schema}.portefeuilles "
+            "WHERE code_gestionnaire = %(gest)s)")
+        params["gest"] = gestionnaire
     if numero:
         conditions.append("lower(numero_bl) LIKE %(num)s")
         params["num"] = f"%{numero.lower()}%"
