@@ -2,7 +2,6 @@
 
 import logging
 import sys
-import os
 
 import streamlit as st
 
@@ -27,13 +26,14 @@ def injecter_style() -> None:
     st.markdown(
         """
         <style>
-        /* Titre principal : graisse forte + soulignement dégradé court */
+        /* Titre principal : plus grand, graisse forte + soulignement dégradé */
         [data-testid="stAppViewContainer"] h1 {
-            font-weight: 700;
+            font-weight: 800;
+            font-size: 2.45rem;
             letter-spacing: -0.02em;
-            padding-bottom: 0.35rem;
-            background: linear-gradient(90deg, #0F62A6, #4FA3E3)
-                        bottom left / 72px 4px no-repeat;
+            padding-bottom: 0.4rem;
+            background: linear-gradient(90deg, #0F62A6, #43B02A)
+                        bottom left / 120px 5px no-repeat;
         }
         /* Boutons : coins arrondis, relief léger au survol */
         .stButton > button, [data-testid="stFormSubmitButton"] > button {
@@ -72,31 +72,33 @@ def injecter_style() -> None:
             background: linear-gradient(180deg, #10263C 0%, #16334F 100%);
         }
         [data-testid="stSidebar"] * { color: #E8EFF7 !important; }
-        [data-testid="stSidebar"] hr { border-color: rgba(232, 239, 247, 0.25); }
-        /* Items de navigation : plus grands et plus aérés (libellés/icônes
-           inchangés, seule la taille de police et l'espacement augmentent). */
-        [data-testid="stSidebar"] label[data-baseweb="radio"] {
-            padding: 0.5rem 0.6rem;
-            margin: 0.12rem 0;
-            border-radius: 9px;
-        }
-        [data-testid="stSidebar"] label[data-baseweb="radio"] div[data-testid="stMarkdownContainer"] p {
-            font-size: 1.12rem;
-            line-height: 1.5;
+        [data-testid="stSidebar"] hr { border-color: rgba(232, 239, 247, 0.22); margin: 0.5rem 0; }
+        /* Navigation en arbre : chaque item est un bouton pleine largeur, aligné
+           à gauche, police plus grande. L'item actif est surligné (barre verte
+           à gauche). Les vues sont indentées sous leur module. */
+        [data-testid="stSidebar"] .stButton > button {
+            background: transparent;
+            border: none;
+            box-shadow: none !important;
+            color: #E8EFF7;
+            text-align: left;
+            justify-content: flex-start;
+            font-size: 1.18rem;
             font-weight: 600;
+            padding: 0.52rem 0.6rem;
+            margin: 0.06rem 0;
+            border-radius: 9px;
+            width: 100%;
         }
-        [data-testid="stSidebar"] label[data-baseweb="radio"]:hover {
-            background: rgba(255, 255, 255, 0.08);
+        [data-testid="stSidebar"] .stButton > button:hover {
+            background: rgba(255, 255, 255, 0.09);
+            transform: none;
         }
-        /* Vues indentées sous le module sélectionné (colonne de nesting) */
-        [data-testid="stSidebar"] .bl-nested {
-            border-left: 2px solid rgba(67, 176, 42, 0.55);
-            margin-left: 0.35rem;
-            padding-left: 0.25rem;
-        }
-        [data-testid="stSidebar"] .bl-nested label[data-baseweb="radio"] div[data-testid="stMarkdownContainer"] p {
-            font-size: 1.02rem;
-            font-weight: 500;
+        [data-testid="stSidebar"] .stButton > button[kind="primary"] {
+            background: rgba(67, 176, 42, 0.20) !important;
+            color: #FFFFFF !important;
+            font-weight: 800;
+            box-shadow: inset 3px 0 0 #43B02A !important;
         }
         /* Grilles de données : cadre net */
         [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
@@ -109,21 +111,31 @@ def injecter_style() -> None:
     )
 
 
-# Logo eMotors — recréation SVG (navy/vert de la charte) pensée pour un fond
-# sombre (barre latérale) : E stylisé + « EMOTORS », E vert. Remplaçable par le
-# fichier officiel si besoin (garder le même appel afficher_logo()).
-LOGO_EMOTORS = "./Logo-Emotors-1.jpg"
+# Logo eMotors
+from pathlib import Path
 
+# Chemin vers le fichier SVG dans votre dépôt
+SVG_PATH = Path("logo.svg")
 
 def afficher_logo() -> None:
     """Logo eMotors en haut de la barre latérale (haut à gauche de l'app)."""
-    if os.path.exists(LOGO_EMOTORS):
-        # On utilise st.image pour intégrer proprement le JPG
-        # use_container_width=True permet de s'adapter à la largeur de la sidebar
-        st.image(LOGO_EMOTORS, use_container_width=True)
+    if SVG_PATH.is_file():
+        # Lecture du code XML du fichier SVG
+        svg_content = SVG_PATH.read_text(encoding="utf-8")
+        
+        # Injection du SVG avec le conteneur HTML pour le centrage/marges
+        st.markdown(
+            f'<div style="padding:0.2rem 0 0.5rem; display:block; margin:0 auto; max-width:210px;">{svg_content}</div>',
+            unsafe_allow_html=True,
+        )
     else:
-        # Message d'erreur discret si le fichier est manquant dans le repo
-        st.sidebar.error(f"Logo introuvable : {LOGO_EMOTORS}")
+        st.sidebar.error(f"Fichier SVG introuvable : {SVG_PATH}")
+
+
+
+def entete_app(titre: str, icone: str = "🗂️") -> None:
+    """Grand titre de l'application avec icône de dossier numérisé."""
+    st.markdown(f"# {icone} {titre}")
 
 
 # --- Messages "flash" : survivent à un st.rerun (sinon le message disparaît
