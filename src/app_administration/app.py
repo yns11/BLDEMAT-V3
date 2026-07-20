@@ -12,6 +12,7 @@ Expérience structurée type « model-driven » (à la Power Apps) :
 
 import datetime
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -51,24 +52,49 @@ def _journaliser_passage_ok(numero_bl, fournisseur, quai, date_reception) -> Non
 
 
 # =====================================================================
-# NAVIGATION LATÉRALE
+# NAVIGATION LATÉRALE — arbre : modules, avec vues indentées sous le module
+# sélectionné (chaque item est un bouton ; l'actif est surligné).
 # =====================================================================
+st.session_state.setdefault("nav_module", None)   # None = Tableau de bord
+st.session_state.setdefault("nav_vue", None)
+
+
+def _nav_bouton(label: str, actif: bool, key: str, indent: bool = False) -> bool:
+    conteneur = st
+    if indent:
+        _, conteneur = st.columns([1, 13])
+    return conteneur.button(label, key=key, use_container_width=True,
+                            type="primary" if actif else "secondary")
+
+
 with st.sidebar:
     ui.afficher_logo()
-    st.caption("BL dématérialisés · V3")
     st.divider()
-    espace = st.radio("Navigation", [ESPACE_DASHBOARD] + list(LABELS_MODULE),
-                      label_visibility="collapsed")
-    module = LABELS_MODULE.get(espace)
-    vue = None
-    if module:
-        st.caption("Vues")
-        _, col_vues = st.columns([1, 15])
-        with col_vues:
-            vue = st.radio(f"Vues {module}", MODULES[module], label_visibility="collapsed")
+    dash_actif = st.session_state.nav_module is None
+    if _nav_bouton(f"{'●' if dash_actif else '○'}  {ESPACE_DASHBOARD}", dash_actif, "nav_dash"):
+        st.session_state.nav_module = None
+        st.rerun()
+    for m in MODULES:
+        m_actif = st.session_state.nav_module == m
+        if _nav_bouton(f"{'●' if m_actif else '○'}  {ICONES[m]} {m}", m_actif, f"nav_m_{m}"):
+            st.session_state.nav_module = m
+            st.session_state.nav_vue = MODULES[m][0]
+            st.rerun()
+        if m_actif:
+            for v in MODULES[m]:
+                v_actif = st.session_state.nav_vue == v
+                if _nav_bouton(f"{'●' if v_actif else '○'}  {v}", v_actif, f"nav_v_{m}_{v}",
+                               indent=True):
+                    st.session_state.nav_vue = v
+                    st.rerun()
     st.divider()
     st.caption(f"👤 {utilisateur}")
 
+module = st.session_state.nav_module
+vue = st.session_state.nav_vue if module else None
+espace = ESPACE_DASHBOARD if module is None else f"{ICONES[module]} {module}"
+
+ui.entete_app("Administration des BL")
 ui.show_flash()
 
 
@@ -82,6 +108,11 @@ def render_dashboard() -> None:
     dmin = c1.date_input("Du", value=ajd - datetime.timedelta(days=30))
     dmax = c2.date_input("Au", value=ajd)
     portee = c3.selectbox("Périmètre", ["Tous", "Achat", "Vente"])
+    c4, c5 = st.columns([3, 2])
+    f_tiers = c4.text_input("Fournisseur / client contient", key="dash_tiers").strip()
+    gest_options = [""] + repository.lister_gestionnaires()
+    f_gest = c5.selectbox("Gestionnaire", gest_options,
+                          format_func=lambda g: g or "Tous", key="dash_gest")
 
     try:
         df = repository.lire_bl_pour_dashboard(dmin, dmax).reset_index(drop=True)
@@ -93,6 +124,11 @@ def render_dashboard() -> None:
         df = df[df["type_operation"].isin(repository.TYPES_ACHAT)]
     elif portee == "Vente":
         df = df[df["type_operation"].isin(repository.TYPES_VENTE)]
+    if f_tiers:
+        df = df[df["nom_fournisseur"].fillna("").str.lower().str.contains(f_tiers.lower())]
+    if f_gest:
+        frs_gest = set(repository.lire_portefeuilles(gestionnaire=f_gest)["nom_fournisseur"])
+        df = df[df["nom_fournisseur"].isin(frs_gest)]
 
     total = len(df)
     est = df["type_operation"]
@@ -125,14 +161,23 @@ def render_dashboard() -> None:
                 .reindex(columns=["Achat", "Vente"], fill_value=0).sort_index())
     st.bar_chart(par_jour, color=["#0F62A6", "#43B02A"])
 
-    col_g, col_d = st.columns(2)
+    col_g, col_d = st.columns([3, 1])           # Top tiers plus large
     with col_g:
         st.markdown("#### Top fournisseurs / clients")
-        top = (df["nom_fournisseur"].fillna("—").value_counts().head(8)
-               .rename_axis("Tiers").rename("BL").to_frame())
-        st.bar_chart(top, horizontal=True, color="#0F62A6")
+        top_df = (df["nom_fournisseur"].fillna("—").value_counts().head(10)
+                  .rename_axis("Tiers").reset_index(name="BL"))
+        # Altair : axe Y agrandi + labels non tronqués (désignations longues).
+        chart = (
+            alt.Chart(top_df).mark_bar(color="#0F62A6", cornerRadiusEnd=3).encode(
+                x=alt.X("BL:Q", title="Nombre de BL"),
+                y=alt.Y("Tiers:N", sort="-x", title=None,
+                        axis=alt.Axis(labelFontSize=15, labelLimit=360)),
+                tooltip=["Tiers", "BL"],
+            ).properties(height=max(220, 34 * len(top_df)))
+        )
+        st.altair_chart(chart, use_container_width=True)
     with col_d:
-        st.markdown("#### Réceptions : OK vs EDI NOK")
+        st.markdown("#### OK vs EDI NOK")
         rec = df[df["type_operation"] == repository.TYPE_RECEPTION]
         if rec.empty:
             st.caption("Aucune réception sur la période.")
@@ -217,6 +262,28 @@ def dialog_modifier_bl(bl: dict, ids_photos: list[str], cle_grille: str):
                              use_column_width=True)
                 except Exception as e:
                     st.caption(f"Page {i + 1} inaccessible : {e}")
+
+
+@boite_dialogue("🖼️ Pages du BL")
+def dialog_voir_images(numero_bl: str, ids_photos: list[str]):
+    st.caption(f"BL {numero_bl} — {len(ids_photos)} page(s)")
+    if not ids_photos:
+        st.info("Aucune page attachée à ce BL.")
+        return
+    if len(ids_photos) == 1:
+        _afficher_page(ids_photos[0], 1)
+    else:
+        onglets = st.tabs([f"Page {i + 1}" for i in range(len(ids_photos))])
+        for i, (onglet, id_photo) in enumerate(zip(onglets, ids_photos)):
+            with onglet:
+                _afficher_page(id_photo, i + 1)
+
+
+def _afficher_page(id_photo: str, numero: int) -> None:
+    try:
+        st.image(repository.telecharger_photo(id_photo), use_column_width=True)
+    except Exception as e:
+        st.caption(f"Page {numero} inaccessible : {e}")
 
 
 @boite_dialogue("🗑️ Confirmation")
@@ -337,47 +404,56 @@ def vue_bl(nom_vue: str, types: list[str]) -> None:
     # --- Ruban d'actions contextuel ---
     with ruban:
         n = len(ids_selection)
-        largeurs = [1.2, 1.2, 1.5, 1.3, 1.3, 3.2] if avec_statut else [1.2, 1.2, 1.3, 1.3, 4.7]
-        cols = st.columns(largeurs)
-        if cols[0].button("🔄 Actualiser", key=f"act_{nom_vue}", use_container_width=True):
+        specs = [
+            ("🔄 Actualiser", "act", False, 1.3),
+            ("✏️ Modifier", "mod", n != 1, 1.3),
+            ("🖼️ Voir les images", "img", n != 1, 1.9),
+        ]
+        if avec_statut:
+            specs.append(("✅ Passer à OK", "ok", n == 0, 1.5))
+        specs += [("🗑️ Supprimer", "sup", n == 0, 1.4),
+                  ("♻️ Restaurer", "res", n == 0, 1.4)]
+        cols = st.columns([s[3] for s in specs] + [2.6])
+        clics = {}
+        for i, (label, code, disabled, _) in enumerate(specs):
+            aide = ("Sélectionnez exactement un BL." if code in ("mod", "img")
+                    else "Passe les BL EDI NOK sélectionnés à OK." if code == "ok" else None)
+            clics[code] = cols[i].button(label, key=f"{code}_{nom_vue}", disabled=disabled,
+                                         use_container_width=True, help=aide)
+        cols[-1].markdown(f"**{total}** BL · **{n}** sélectionné(s)")
+
+        if clics["act"]:
             _vider_grille(cle_grille)
             st.rerun()
-        if cols[1].button("✏️ Modifier", key=f"mod_{nom_vue}", disabled=n != 1,
-                          use_container_width=True,
-                          help="Sélectionnez exactement un BL pour ouvrir sa fiche."):
+        if clics["mod"]:
             ligne = df[df["id_bl"] == ids_selection[0]].iloc[0].to_dict()
             dialog_modifier_bl(ligne, photos.get(ids_selection[0], []), cle_grille)
-        decalage = 2
-        if avec_statut:
-            if cols[2].button("✅ Passer à OK", key=f"ok_{nom_vue}", disabled=n == 0,
-                              use_container_width=True,
-                              help="Passe les BL EDI NOK sélectionnés à OK (avec notification)."):
-                bascules = 0
-                for id_bl in ids_selection:
-                    ligne = df[df["id_bl"] == id_bl].iloc[0]
-                    if ligne["statut_bl"] != repository.STATUT_EDI_NOK:
-                        continue
-                    repository.mettre_a_jour_bl(id_bl, {"statut_bl": repository.STATUT_OK}, utilisateur)
-                    _journaliser_passage_ok(ligne["numero_bl"], ligne["nom_fournisseur"],
-                                            ligne["quai_reception"], ligne["date_reception"])
-                    bascules += 1
-                ui.set_flash("success" if bascules else "info",
-                             f"{bascules} BL passé(s) à OK — notification(s) journalisée(s)."
-                             if bascules else "Aucun BL EDI NOK dans la sélection.")
-                _vider_grille(cle_grille)
-                st.rerun()
-            decalage = 3
-        if cols[decalage].button("🗑️ Supprimer", key=f"sup_{nom_vue}", disabled=n == 0,
-                                 use_container_width=True):
+        if clics["img"]:
+            ligne = df[df["id_bl"] == ids_selection[0]].iloc[0]
+            dialog_voir_images(ligne["numero_bl"], photos.get(ids_selection[0], []))
+        if avec_statut and clics.get("ok"):
+            bascules = 0
+            for id_bl in ids_selection:
+                ligne = df[df["id_bl"] == id_bl].iloc[0]
+                if ligne["statut_bl"] != repository.STATUT_EDI_NOK:
+                    continue
+                repository.mettre_a_jour_bl(id_bl, {"statut_bl": repository.STATUT_OK}, utilisateur)
+                _journaliser_passage_ok(ligne["numero_bl"], ligne["nom_fournisseur"],
+                                        ligne["quai_reception"], ligne["date_reception"])
+                bascules += 1
+            ui.set_flash("success" if bascules else "info",
+                         f"{bascules} BL passé(s) à OK — notification(s) journalisée(s)."
+                         if bascules else "Aucun BL EDI NOK dans la sélection.")
+            _vider_grille(cle_grille)
+            st.rerun()
+        if clics["sup"]:
             dialog_supprimer_bls(ids_selection, cle_grille)
-        if cols[decalage + 1].button("♻️ Restaurer", key=f"res_{nom_vue}", disabled=n == 0,
-                                     use_container_width=True):
+        if clics["res"]:
             for id_bl in ids_selection:
                 repository.restaurer_bl(id_bl, utilisateur)
             ui.set_flash("success", f"{n} BL restauré(s).")
             _vider_grille(cle_grille)
             st.rerun()
-        cols[-1].markdown(f"**{total}** BL · **{n}** sélectionné(s)")
 
 
 # =====================================================================
