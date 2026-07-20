@@ -120,7 +120,7 @@ def afficher_logo() -> None:
     if os.path.exists(LOGO_PATH):
         # On utilise st.image pour intégrer proprement le JPG
         # use_container_width=True permet de s'adapter à la largeur de la sidebar
-        st.image(LOGO_PATH, use_container_width=True)
+        st.image(LOGO_PATH, use_column_width=True)
     else:
         # Message d'erreur discret si le fichier est manquant dans le repo
         st.sidebar.error(f"Logo introuvable : {LOGO_PATH}")
