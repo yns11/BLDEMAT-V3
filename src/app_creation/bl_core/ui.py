@@ -2,6 +2,7 @@
 
 import logging
 import sys
+import os
 
 import streamlit as st
 
@@ -112,34 +113,19 @@ def injecter_style() -> None:
 
 
 # Logo eMotors
-from pathlib import Path
-import re
-
-# Chemin vers le fichier SVG dans votre dépôt
-SVG_PATH = Path("logo.svg")
+LOGO_PATH = "logo.jpg"
 
 def afficher_logo() -> None:
-    """Logo eMotors en haut de la barre latérale avec nettoyage des dimensions fixes."""
-    if SVG_PATH.is_file():
-        svg_content = SVG_PATH.read_text(encoding="utf-8")
-        
-        # 1. On nettoie les anciens attributs width et height de la balise <svg ...> 
-        # pour éviter les conflits et le crop
-        svg_cleaned = re.sub(r'<svg[^>]*>', lambda m: re.sub(r'\b(width|height)\s*=\s*"[^"]*"', '', m.group(0)), svg_content, count=1)
-        
-        # 2. On injecte le style fluide et la taille maximale souhaitée
-        svg_resized = svg_cleaned.replace(
-            "<svg", 
-            '<svg style="width:100%; max-width:180px; height:auto; display:block; margin:0 auto;"'
-        )
-        
-        # Injection du SVG corrigé
-        st.markdown(
-            f'<div style="padding: 0.5rem 0; text-align: center;">{svg_resized}</div>',
-            unsafe_allow_html=True,
-        )
+    """Logo eMotors en haut de la barre latérale (haut à gauche de l'app)."""
+    if os.path.exists(LOGO_PATH):
+        # On utilise st.image pour intégrer proprement le JPG
+        # use_container_width=True permet de s'adapter à la largeur de la sidebar
+        st.image(LOGO_PATH, use_container_width=True)
     else:
-        st.sidebar.error(f"Fichier SVG introuvable : {SVG_PATH}")
+        # Message d'erreur discret si le fichier est manquant dans le repo
+        st.sidebar.error(f"Logo introuvable : {LOGO_PATH}")
+
+
 
 def entete_app(titre: str, icone: str = "🗂️") -> None:
     """Grand titre de l'application avec icône de dossier numérisé."""
