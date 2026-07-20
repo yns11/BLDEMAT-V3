@@ -123,14 +123,20 @@ def afficher_logo() -> None:
         # Lecture du code XML du fichier SVG
         svg_content = SVG_PATH.read_text(encoding="utf-8")
         
-        # Injection du SVG avec le conteneur HTML pour le centrage/marges
+        # On force le SVG à faire une taille raisonnable (ex: max 180px)
+        # pour éviter qu'il n'envahisse toute la sidebar
+        svg_resized = svg_content.replace(
+            "<svg", 
+            '<svg style="width:100%; max-width:180px; height:auto; display:block; margin:0 auto;"'
+        )
+        
+        # Injection du SVG redimensionné
         st.markdown(
-            f'<div style="padding:0.2rem 0 0.5rem; display:block; margin:0 auto; max-width:210px;">{svg_content}</div>',
+            f'<div style="padding: 0.5rem 0; text-align: center;">{svg_resized}</div>',
             unsafe_allow_html=True,
         )
     else:
         st.sidebar.error(f"Fichier SVG introuvable : {SVG_PATH}")
-
 
 
 def entete_app(titre: str, icone: str = "🗂️") -> None:
