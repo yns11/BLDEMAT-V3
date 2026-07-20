@@ -113,7 +113,7 @@ def injecter_style() -> None:
 
 
 # Logo eMotors
-LOGO_PATH = "logo.jpg"
+LOGO_PATH = "logo.png"
 
 def afficher_logo() -> None:
     """Logo eMotors en haut de la barre latérale (haut à gauche de l'app)."""
