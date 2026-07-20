@@ -125,7 +125,7 @@ def afficher_logo() -> None:
         
         # Injection du SVG avec le conteneur HTML pour le centrage/marges
         st.markdown(
-            f'<div style="padding:0.2rem 0 0.5rem; display:block; margin:0 auto; max-width:210px;">{svg_content}</div>',
+            f'<div style="padding:0.2rem 0 0.5rem; margin:0 0;">{svg_content}</div>',
             unsafe_allow_html=True,
         )
     else:
