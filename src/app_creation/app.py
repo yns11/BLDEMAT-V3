@@ -72,7 +72,7 @@ def reinitialiser_wizard() -> None:
         st.session_state.pop(cle, None)
 
 
-st.title("🗂️ Création de BL")
+st.title("📥 Création de BL")
 ui.show_flash()
 
 etape = st.session_state.etape
